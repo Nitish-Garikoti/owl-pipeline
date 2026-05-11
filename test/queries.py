@@ -4,7 +4,7 @@ Example queries against the normalized stock schema.
 
 Run after pipeline.py has loaded data:
     uv run python scripts/pipeline.py
-    uv run python scripts/queries.py
+    uv run python test/queries.py
 """
 
 import sqlite3

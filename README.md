@@ -6,7 +6,8 @@ relational schema and keeps it in sync across re-runs.
 ## Layout
 
 ```
-scripts/       pipeline.py, queries.py
+scripts/       pipeline.py
+test/          queries.py
 data/          stock-data-se-owl.csv, stock-data-se-owl-part2.csv
 db/            stock.db  (runtime, gitignored)
 pyproject.toml project metadata (requires-python >=3.10)
@@ -62,13 +63,38 @@ The pipeline is idempotent — re-running against the same file is always safe.
 ## Running the queries
 
 ```bash
-uv run python scripts/queries.py
+uv run python test/queries.py
 ```
 
-Prints three example queries to stdout:
-1. Cumulative price return per company over the full history
-2. Average daily trading volume grouped by sector
-3. Most recent market cap per company (populated after v2 load)
+Prints three queries to stdout. Run the pipeline first so the DB exists.
+
+### Query 1 — Cumulative price return per company
+
+Finds the first and last closing price for each company across its full date
+range, then computes `(last − first) / first × 100` as a percentage return.
+Results are sorted highest return first.
+
+Exercises a multi-table join (`stock_prices → companies → sectors`) and uses
+two CTEs — `first_price` and `last_price` — to pin the open and close values
+before joining them together.
+
+### Query 2 — Average daily trading volume by sector
+
+Groups every `stock_prices` row by sector, counts how many distinct companies
+sit in each sector, and averages the daily volume across all companies and all
+dates in that sector. Sorted highest volume first.
+
+Useful for spotting which sectors are most actively traded — e.g. Technology
+vs Consumer Cyclicals — without needing to look at individual companies.
+
+### Query 3 — Latest market cap per company
+
+For each company, finds the most recent date where `mktcap_usd` is not null
+and returns that value converted to USD billions. Sorted largest cap first.
+
+Only populated after loading the v2 CSV (which introduces the `mktcap_usd`
+column). If the v2 data hasn't been loaded yet, the query prints a notice
+instead of an empty table.
 
 Requires Python 3.10+. No third-party runtime dependencies — `uv sync` only
 creates the virtual environment; the pipeline itself uses the stdlib only.
@@ -93,7 +119,7 @@ strings from every price row and makes joins natural.
   natural key is `(company_id, asof)`.  Re-running against the same or an
   updated CSV replaces stale values while leaving untouched rows alone.
 
-## Example queries (`scripts/queries.py`)
+## Example queries (`test/queries.py`)
 
 | Query | What it shows |
 |---|---|
