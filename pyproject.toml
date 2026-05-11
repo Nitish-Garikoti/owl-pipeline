@@ -1,0 +1,6 @@
+[project]
+name = "owl-stock-pipeline"
+version = "0.1.0"
+description = "Normalized SQLite ETL for historical stock data"
+requires-python = ">=3.10"
+dependencies = []
