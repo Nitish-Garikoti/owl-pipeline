@@ -40,7 +40,7 @@ Clone the repo and let uv create the virtual environment:
 
 ```bash
 git clone <repo-url>
-cd owl-stock-pipeline
+cd owl-pipeline
 uv sync          # reads pyproject.toml + uv.lock, creates .venv
 ```
 
@@ -89,10 +89,9 @@ strings from every price row and makes joins natural.
 
 - `sectors` / `companies`: `INSERT OR IGNORE` — reference data that never
   changes.
-- `stock_prices`: `INSERT … ON CONFLICT DO UPDATE SET volume, close_usd` — the
+- `stock_prices`: `INSERT … ON CONFLICT DO UPDATE SET volume, close_usd, mktcap_usd` — the
   natural key is `(company_id, asof)`.  Re-running against the same or an
-  updated CSV replaces stale price/volume values while leaving untouched rows
-  alone.
+  updated CSV replaces stale values while leaving untouched rows alone.
 
 ## Example queries (`scripts/queries.py`)
 
