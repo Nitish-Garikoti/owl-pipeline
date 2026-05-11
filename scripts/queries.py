@@ -87,10 +87,39 @@ def avg_daily_volume_by_sector(conn: sqlite3.Connection) -> None:
         print(f"  {s1} / {s2:<28}  {n} co.  avg vol {vol:>16,.0f}")
 
 
+def latest_market_cap(conn: sqlite3.Connection) -> None:
+    """Most recent market cap per company (requires mktcap_usd from v2 CSV)."""
+    rows = conn.execute("""
+        SELECT c.name,
+               s.sector_level1,
+               sp.asof,
+               ROUND(sp.mktcap_usd / 1e9, 2) AS mktcap_bn_usd
+        FROM   stock_prices sp
+        JOIN   companies c ON c.id = sp.company_id
+        JOIN   sectors   s ON s.id = c.sector_id
+        WHERE  sp.mktcap_usd IS NOT NULL
+          AND  sp.asof = (
+              SELECT MAX(asof) FROM stock_prices sp2
+              WHERE  sp2.company_id  = sp.company_id
+                AND  sp2.mktcap_usd IS NOT NULL
+          )
+        ORDER  BY sp.mktcap_usd DESC
+    """).fetchall()
+
+    if not rows:
+        print("\n(mktcap_usd not yet loaded — run pipeline against v2 CSV first)")
+        return
+
+    print("\n=== Latest Market Cap Per Company (USD bn) ===")
+    for name, sector, asof, mcap in rows:
+        print(f"  {name:<25} {sector:<25} as of {asof}  ${mcap:>10,.2f}bn")
+
+
 def main() -> None:
     with sqlite3.connect(DB_PATH) as conn:
         cumulative_return(conn)
         avg_daily_volume_by_sector(conn)
+        latest_market_cap(conn)
 
 
 if __name__ == "__main__":

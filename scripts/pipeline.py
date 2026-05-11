@@ -11,9 +11,15 @@ Schema
 Idempotency
 -----------
   sectors / companies : INSERT OR IGNORE (static reference data)
-  stock_prices        : INSERT … ON CONFLICT DO UPDATE SET volume, close_usd
-                        → price corrections and split adjustments propagate
-                          automatically on re-run
+  stock_prices        : INSERT … ON CONFLICT DO UPDATE SET volume, close_usd,
+                        mktcap_usd → price corrections, split adjustments, and
+                        new columns propagate automatically on re-run
+
+Migration
+---------
+  _migrate() inspects PRAGMA table_info and issues ALTER TABLE statements for
+  any columns present in the CSV but missing from the live schema.  Running the
+  pipeline against a v2 CSV therefore self-heals the schema before loading.
 """
 
 import csv
@@ -64,6 +70,7 @@ CREATE TABLE IF NOT EXISTS stock_prices (
     asof       TEXT    NOT NULL,
     volume     INTEGER,
     close_usd  REAL,
+    mktcap_usd REAL,
     PRIMARY KEY (company_id, asof)
 );
 """
@@ -74,12 +81,48 @@ def _init_schema(conn: sqlite3.Connection) -> None:
 
 
 # ---------------------------------------------------------------------------
+# migrations
+# ---------------------------------------------------------------------------
+
+# Map column name → ALTER TABLE statement to add it.
+# Extend this dict whenever the source CSV gains a new column.
+_MIGRATIONS: dict[str, str] = {
+    "mktcap_usd": "ALTER TABLE stock_prices ADD COLUMN mktcap_usd REAL",
+}
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """
+    Add any missing columns to stock_prices.
+
+    Always runs so that a DB created by an older version of this pipeline is
+    upgraded before we attempt to write to it.  A fresh DB never needs these
+    because _DDL already declares every known column.
+    """
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(stock_prices)")}
+    for col, ddl in _MIGRATIONS.items():
+        if col not in existing:
+            conn.execute(ddl)
+            conn.commit()
+            print(f"Migration applied: {ddl}")
+
+
+# ---------------------------------------------------------------------------
 # load
 # ---------------------------------------------------------------------------
 
 def _load(conn: sqlite3.Connection, csv_path: Path) -> int:
     with open(csv_path, encoding="utf-8-sig", newline="") as fh:
-        rows = list(csv.DictReader(fh))
+        reader = csv.DictReader(fh)
+        rows = list(reader)
+        csv_columns = set(reader.fieldnames or [])
+
+    has_mktcap = "mktcap_usd" in csv_columns
+
+    # apply any pending schema migrations before touching data;
+    # always called so DBs created by Commit 1 (no mktcap_usd column) are
+    # upgraded automatically, regardless of which CSV is supplied
+    _migrate(conn)
 
     # sectors
     conn.executemany(
@@ -111,21 +154,23 @@ def _load(conn: sqlite3.Connection, csv_path: Path) -> int:
         for cid, name in conn.execute("SELECT id, name FROM companies")
     }
 
-    # stock prices – upsert so corrections / split-adjustments propagate
+    # stock prices – upsert so corrections / split-adjustments / backfills propagate
     conn.executemany(
         """
-        INSERT INTO stock_prices (company_id, asof, volume, close_usd)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO stock_prices (company_id, asof, volume, close_usd, mktcap_usd)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (company_id, asof) DO UPDATE SET
-            volume    = excluded.volume,
-            close_usd = excluded.close_usd
+            volume     = excluded.volume,
+            close_usd  = excluded.close_usd,
+            mktcap_usd = COALESCE(excluded.mktcap_usd, stock_prices.mktcap_usd)
         """,
         [
             (
                 company_id[r["name"].strip()],
                 _parse_date(r["asof"]),
-                int(r["volume"])       if r["volume"]    else None,
-                float(r["close_usd"]) if r["close_usd"] else None,
+                int(r["volume"])        if r["volume"]               else None,
+                float(r["close_usd"])   if r["close_usd"]            else None,
+                float(r["mktcap_usd"])  if has_mktcap and r.get("mktcap_usd") else None,
             )
             for r in rows
         ],
